@@ -22,9 +22,11 @@ import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.Menu;
 import android.view.WindowManager;
 import android.widget.TextView;
+import android.widget.Toast;
 
 public class MainActivity extends Activity
                           implements TextToSpeech.OnInitListener {
@@ -36,10 +38,9 @@ public class MainActivity extends Activity
 	private final static String LAST_ALT = "last_lalt";
 	private final static String LAST_TIME = "last_time";
 	private final static String LAST_ACCURACY = "last_accuracy";
-	private final long pollTimeMillis = 120000;   // make 3 minutes intervals
-	
-	private int s = 0;
-	public final static String NEXT_LANG = "next_lang";
+	private final long pollTimeMillis = 62000;   // make 3 minutes intervals
+
+	private final static String NEXT_LANG = "next_lang";
 	
 	private SharedPreferences sharedPref = null;
 	boolean noLocation = true;
@@ -51,48 +52,24 @@ public class MainActivity extends Activity
 	private long   sampleTime = 0;
 	
 	private int timesNoGps = 0;
-	
-	private LocationListener myListener = null;
+	private int s = 0;
+	private LocationListener myLocListener = null;
 
 	private List<String> locProviders = null;
 	private TextToSpeech  tts = null;
 	private String nextLang = "";
-	boolean ttsReady = false;
-	Location lastLoc = null;
-	AudioManager audioManager = null;
+	private boolean ttsReady = false;
+	private Location lastLoc = null;
+	private AudioManager audioManager = null;
+	private OnAudioFocusChangeListener  afChangeListener = null;
+	
 	
 	@TargetApi(Build.VERSION_CODES.ICE_CREAM_SANDWICH_MR1)
 	private class utteranceListener extends UtteranceProgressListener {
-		private OnAudioFocusChangeListener afChangeListener = new OnAudioFocusChangeListener() {
-		    public void onAudioFocusChange(int focusChange) {
-		        if (focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT){
-		            // Pause playback
-		        	Log.d("utter", "received pause");
-		        	speakOut(TextToSpeech.QUEUE_FLUSH, ", pause!");
-		        	threadWait(100);
-		        } else if (focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK){
-		            //  we don't duck, just abandon audio
-		        	Log.d("utter", "received pause with duck");
-		        	speakOut(TextToSpeech.QUEUE_FLUSH, ", Duck!");
-		        	threadWait(100);
-		        } else if (focusChange == AudioManager.AUDIOFOCUS_GAIN) {
-		            // Resume playback 
-		        	Log.d("utter", "received regain");
-		        } else if (focusChange == AudioManager.AUDIOFOCUS_LOSS) {
-		            // Stop playback, somebody grabbed audio focus, stop talking
-		        	Log.d("utter", "received stop");
-		        	speakOut(TextToSpeech.QUEUE_FLUSH, ", Stop!");
-		        	// abandon audio focus does not help, unless having wait, onDone, 
-		        	// stop might be better, and still wait here
-		        	threadWait(100);
-		        }
-		    }
-		};
-
 		@Override
         public void onDone(String utteranceId)
-        {
-			
+        {			
+			tts.setSpeechRate(1.0f);
 			Log.d("onUtter", "Enter utterance onDone  " + utteranceId);
 			Log.d("onUtter", " adandoning audio...");
 			int res = audioManager.abandonAudioFocus(afChangeListener);
@@ -100,10 +77,8 @@ public class MainActivity extends Activity
 				// allow time for audio focus abandoning...
 				Log.e("onUtter", "Failed to abandon audio");  
 			}
-			// allow time for audio focus abandoning... 
-			// otherwise, when music start, it will issue utter stop and current app would abandon audio focus again
-			// (if coded in), eventually, after next speech finishes, music would  not start.
-			threadWait(100); 
+			// wait is necessary, otherwise, there are overlappings, or stopped talking for all apps.
+			threadWait(100);
     		Log.d("onUtter", "Exit utterance onDone " + utteranceId);
         }
 
@@ -112,28 +87,23 @@ public class MainActivity extends Activity
         {
         	Log.e("onUtter", "Failed");
     		audioManager.abandonAudioFocus(afChangeListener);
-    		threadWait(100);
         }
 
         @Override
         public void onStart(String utteranceId)
         {
-        	Log.d("onUtter", "Enter utterance onStart " + utteranceId);
-        	Log.d("onUtter", "  getting audio focus...");
-	        int res = audioManager.requestAudioFocus(afChangeListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
-	        if (res == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-		        // allow time to have audio-focus requests executed
-		        Log.d("onUtter", " audio request granted! " );
-	        } else {
-	        	Log.e("onUtter", "Failed to grant audio requests");
-	        	threadWait(100);
-	        }
-        	Log.d("onUtter", "Exit  utterance onStart " + utteranceId);
+        	Log.d("onUtter", " onStart " + utteranceId);
+        	int res = audioManager.requestAudioFocus(afChangeListener, AudioManager.STREAM_MUSIC, 
+                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
+        	if (res == AudioManager.AUDIOFOCUS_REQUEST_FAILED) {
+        		// throw this worker thread out, don't speak.
+        		throw new RuntimeException();
+        	}
         }
 	}
 	
-	private class MyListener implements LocationListener {
-		public MyListener()  {
+	private class MyLocationListener implements LocationListener {
+		public MyLocationListener()  {
 			super();
 		};
 		
@@ -225,6 +195,28 @@ public class MainActivity extends Activity
             tts = null;
        }
        if (tts != null) {
+           afChangeListener = new OnAudioFocusChangeListener() {
+				public void onAudioFocusChange(int focusChange) {
+					switch(focusChange) {
+					case AudioManager.AUDIOFOCUS_GAIN:
+					case AudioManager.AUDIOFOCUS_GAIN_TRANSIENT:
+					case AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK:
+						// do nothing
+						Log.d("Focus", "Gained Audio Focus");
+						break;
+					case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
+					case AudioManager.AUDIOFOCUS_LOSS:
+					case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
+						tts.stop();
+						audioManager.abandonAudioFocus(afChangeListener);
+						Log.d("Focus", "Lost Audio Focus, wait for a while");
+						threadWait(1800);
+						break;
+					default:
+						Log.d("Focus", "Wrong value " + focusChange);
+					}
+				}
+           };
     	   if (Build.VERSION.SDK_INT >= 15) {
     		   UtteranceProgressListener ul = new utteranceListener();
     		   tts.setOnUtteranceProgressListener(ul);
@@ -247,14 +239,10 @@ public class MainActivity extends Activity
     @Override
     public void onStart() {
     	super.onStart();
-    	Log.d("Start", "done onStart");
-    }
-        
-    @Override
-    public void onResume() {    	
-    	super.onResume();
-    	
+    	// allow hardware volume button to work here
+    	this.setVolumeControlStream(AudioManager.STREAM_MUSIC);
     	audioManager = (AudioManager)getSystemService(Context.AUDIO_SERVICE);
+    	
     	// Restore saved language
     	provider = sharedPref.getString(LAST_PROV, "");
         nextLang = sharedPref.getString(MainActivity.NEXT_LANG, "");
@@ -276,6 +264,12 @@ public class MainActivity extends Activity
     	getWindow().setAttributes(lp);
     	
     	tts = new TextToSpeech(this, this);
+    	Log.d("Start", "done onStart");
+    }
+        
+    @Override
+    public void onResume() {    	
+    	super.onResume();
     	
     	timesNoGps = 0;
     	setupLocationCallbacks();
@@ -356,12 +350,12 @@ public class MainActivity extends Activity
     	}
 
     	// Define a listener that responds to location updates
-    	myListener = new MyListener();
+    	myLocListener = new MyLocationListener();
     	
     	// Register the listener with the Location Manager to receive location updates
     	for (String providerStr: locProviders) {
     		if (!providerStr.equalsIgnoreCase(LocationManager.PASSIVE_PROVIDER)) {
-	    		locationManager.requestLocationUpdates(providerStr, pollTimeMillis, 10.0f, myListener);
+	    		locationManager.requestLocationUpdates(providerStr, pollTimeMillis, 0.0f, myLocListener);
 	    		Log.d("Listener", "for provider "+ providerStr);
     		}
     	}
@@ -371,7 +365,7 @@ public class MainActivity extends Activity
     	// Acquire a reference to the system Location Manager
     	LocationManager locationManager = (LocationManager) this.getSystemService(Context.LOCATION_SERVICE);
     	
-    	locationManager.removeUpdates(myListener);
+    	locationManager.removeUpdates(myLocListener);
 
     	Log.d("Listener", "down");
     }
@@ -391,7 +385,7 @@ public class MainActivity extends Activity
                               "<speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\" " +
                               "xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" " +
                               "xsi:schemaLocation=\"http://www.w3.org/2001/10/synthesis http://www.w3.org/TR/speech-synthesis/synthesis.xsd\" " +
-                              "xml:lang=\"en-US\"><prosody rate=\"1.5\">" + dispTxt + "</prosody></speak>";
+                              "xml:lang=\"en-US\"><prosody rate=\"1.2\">" + dispTxt + "</prosody></speak>";
  	    	speakOut(TextToSpeech.QUEUE_ADD, speakTxt);
  	    	
  	    	// check distance the ascend/descend
@@ -399,7 +393,7 @@ public class MainActivity extends Activity
  	    		Location newL = getLocationInstance(provider, latitude, longitude, altitude, accuracy, sampleTime);
  	    		float dist = newL.distanceTo(l);
  	    		double h = altitude - l.getAltitude();
- 	    		if ((dist > 30) || (h > 20) || (h < -20)) {
+ 	    		if ((dist > 20) || (h > 20) || (h < -20)) {
  	    			String distMsg = "Traveled distance of " + (int)(dist) + " meters, ";
  	    			if (h > 0.5) {
  	    				distMsg = distMsg + " ascended up " + (int)(h) + " meters, ";
@@ -409,6 +403,7 @@ public class MainActivity extends Activity
  	    			long pastMin = ((sampleTime - l.getTime())/1000)/60;
  	    			distMsg = distMsg + " in the past " + pastMin + " minutes. \n";
  	    			textView.setText(dispTxt + distMsg);
+ 	    			tts.setSpeechRate(1.8f);
  	    			speakOut(TextToSpeech.QUEUE_ADD, distMsg);
  	    		}
  	    	}
@@ -417,11 +412,24 @@ public class MainActivity extends Activity
 
     private void speakOut(int queueMode, String speakTxt) {
     	if (tts != null && ttsReady == true) {
-    		//  set up UtteranceID, only that, the UtteranceProgressListener will see call back.
-    		HashMap<String, String> hm = new HashMap<String, String>();
-    		s++;
-    		hm.put(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "myAnnoun_" + s);
-    		tts.speak(speakTxt, queueMode, hm);
+    		// acquire audio focus 
+    		// NOTE: this is a sanity acquire, there are cases that this method is called 
+    		//       before previous sentence is finished, so the app still has the focus,
+    		//       this method would pass through, and QUEUED the speech, and when
+    		//       the previous speech is done, it abandons focus, the music will be on.
+    		//  SO, it is important to acquire focus again in onStart(), so that this 
+    		//  sentence will have the focus.
+	        int res = audioManager.requestAudioFocus(afChangeListener, AudioManager.STREAM_MUSIC, 
+                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
+	        if (res == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+	        	// set utterance ID, in order to make utterance progress listener work
+	    		HashMap<String, String> hm = new HashMap<String, String>();
+	    		s++;
+	    		hm.put(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "Utterance " + s);
+	    		tts.speak(speakTxt, queueMode, hm);
+	        } else {
+	        	myToast("Failed to get audio!");
+	        }
     	}
     }
     
@@ -441,5 +449,12 @@ public class MainActivity extends Activity
 			// allow time to abandon audio
 			Thread.sleep(millis);
 		}catch(InterruptedException x) {}
+    }
+    
+    private void myToast(String text) {
+    	Context context = getApplicationContext();
+    	Toast toast = Toast.makeText(context, text, Toast.LENGTH_LONG);
+    	toast.setGravity(Gravity.TOP|Gravity.LEFT, 10, 20);
+    	toast.show();
     }
 }

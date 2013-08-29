@@ -9,7 +9,7 @@
     
     <uses-sdk
         android:minSdkVersion="9"
-        android:targetSdkVersion="17" />
+        android:targetSdkVersion="18" />
 
     <application
         android:allowBackup="true"
@@ -26,6 +26,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".KillActivity"
+            android:label="@string/title_activity_kill"
+            >
+        </activity>     
+        <service android:name="net.garyzhu.locannouncer.LocAnnouncer"></service>
     </application>
 
 </manifest>
+

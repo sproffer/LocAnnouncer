@@ -42,7 +42,9 @@ public final class R {
         public static final int app_desc=0x7f050004;
         public static final int app_name=0x7f050000;
         public static final int foreground_service_started_ticker=0x7f050003;
+        public static final int kill_intent_action=0x7f050006;
         public static final int pref_file_name=0x7f050002;
+        public static final int relaunch_intent_action=0x7f050007;
         public static final int title_activity_kill=0x7f050005;
     }
     public static final class style {

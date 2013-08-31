@@ -7,5 +7,6 @@
     <string name="foreground_service_started_ticker">LocAnnouncer is running</string>
     <string name="app_desc">Location Announcer</string>    
     <string name="title_activity_kill">Exit LocAnnouncer</string>
-
+	<string name="kill_intent_action">net.garyzhu.locannouncer.KILL</string>
+	<string name="relaunch_intent_action">net.garyzhu.locannouncer.RELAUNCH</string>
 </resources>

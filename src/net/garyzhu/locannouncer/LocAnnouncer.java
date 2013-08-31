@@ -261,13 +261,17 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
       
 		  // intent to re-launch Activity UI
 		  Intent notificationIntent = new Intent(this, MainActivity.class);
+		  notificationIntent.setAction(getString(R.string.relaunch_intent_action));
 		  notificationIntent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
 		  PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, 0);
 			
-		  // intent to launch KillActivity to kill this service
-		  Intent killIntent = new Intent(this, KillActivity.class);
+		  // intent to launch KillActivity to kill this service,
+		  // the comparison of intent does not look for extras, so I have to set 
+		  // Action differently and allow MainActivity to see whether to kill.
+		  Intent killIntent = new Intent(this, MainActivity.class);
+		  killIntent.setAction(getString(R.string.kill_intent_action));
 		  killIntent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-		  PendingIntent pendingKillIntent = PendingIntent.getActivity(this, 0, killIntent, 0);
+		  PendingIntent pendingKillIntent = PendingIntent.getActivity(this, 0, killIntent, PendingIntent.FLAG_UPDATE_CURRENT);
 		  
 		  NotificationCompat.Builder nb = new NotificationCompat.Builder(this);
 		  nb.setContentTitle(getString(R.string.app_name))

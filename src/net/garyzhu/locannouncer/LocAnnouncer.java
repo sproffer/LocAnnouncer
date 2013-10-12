@@ -1,17 +1,23 @@
 package net.garyzhu.locannouncer;
 
 import java.text.NumberFormat;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import android.annotation.TargetApi;
 import android.app.Notification;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.location.Location;
 import android.location.LocationListener;
@@ -20,7 +26,6 @@ import android.media.AudioManager;
 import android.media.AudioManager.OnAudioFocusChangeListener;
 import android.os.Build;
 import android.os.Bundle;
-
 import android.os.IBinder;
 
 import android.speech.tts.TextToSpeech;
@@ -29,25 +34,19 @@ import android.support.v4.app.NotificationCompat;
 import android.util.Log;
 
 public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener {
-	// key values to save last position and time
-	private final static String LAST_PROV = "last_provider";
-	private final static String LAST_LAT = "last_lat";
-	private final static String LAST_LONG = "last_long";
-	private final static String LAST_ALT = "last_lalt";
-	private final static String LAST_TIME = "last_time";
-	private final static String LAST_ACCURACY = "last_accuracy";
-	private final long pollTimeMillis = 122000;   // make 2 minutes intervals
-
+	
+	private final long pollTimeMillis = 21000;   // poll location every 20 seconds
+    private final int speakInterval = 6;
+    private int polledTimes = 0;
+        
 	private final static String NEXT_LANG = "next_lang";
 	
+	DataManager dm = null;
+	boolean fwReady = false;
+	String tripName = "";
 	private SharedPreferences sharedPref = null;
 	boolean noLocation = true;
-	private double latitude = 0.00;
-	private double longitude = 0.00; 
-	private double altitude = 0.00;
-	private float  accuracy = 0.0f;
-	private String provider = "";
-	private long   sampleTime = 0;
+	private JSONObject lastLocationJSObj = null;
 	
 	private int timesNoGps = 0;
 	private int s = 0;
@@ -57,16 +56,39 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
 	private TextToSpeech  tts = null;
 	private String nextLang = "";
 	private boolean ttsReady = false;
-	private Location lastLoc = null;
 	private AudioManager audioManager = null;
 	private OnAudioFocusChangeListener  afChangeListener = null;
 	
+	// receiving stop notification
+	final public static String USER_STOP_SERVICE_REQUEST = "USER_STOP_SERVICE";
+	final public static String USER_STOP_INTENT = "USER_STOP_INTENT";
+	public class UserStopServiceReceiver extends BroadcastReceiver  
+	{  
+	    @Override  
+	    public void onReceive(Context context, Intent intent)  
+	    {  
+	        //code that handles user specific way of stopping service 
+	    	String stopCommand = intent.getStringExtra(USER_STOP_INTENT);
+	    	Log.d("onServce", "stop command is " + stopCommand);
+
+	    	if (stopCommand != null && stopCommand.equalsIgnoreCase(getString(R.string.kill_intent_action))) {
+	    		dm.close(true);
+	    	} else {
+	    		dm.close(false);
+	    	}
+	    	stopSelf();
+	    }  
+	}
+	private UserStopServiceReceiver stopReceiver = null;
+			
 	@TargetApi(Build.VERSION_CODES.ICE_CREAM_SANDWICH_MR1)
 	private class utteranceListener extends UtteranceProgressListener {
 		@Override
         public void onDone(String utteranceId)
         {			
 			tts.setSpeechRate(1.0f);
+			tts.setPitch(1.0f);
+			
 			Log.d("onUtter", "Enter utterance onDone  " + utteranceId);
 			Log.d("onUtter", " adandoning audio...");
 			int res = audioManager.abandonAudioFocus(afChangeListener);
@@ -112,52 +134,74 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
 		};
 		
 	    public void onLocationChanged(Location location) {
-	        Log.d("onLocChange", location.getProvider() + ":   "+ location.getLatitude() + ", " + location.getLongitude() + ";   altitude=" + location.getAltitude() +
-	        		";   precision=" + location.getAccuracy());
-	        
-	        if (location.getProvider().equalsIgnoreCase(LocationManager.GPS_PROVIDER))
-	        {
-	        	// have GPS signal, reset the counter
-	        	timesNoGps = 0;
-	        } else {
-	        	timesNoGps++;
-	        }
-	        /**
-	         * check to see whether to update the location:
-	         * 1.  if same provider, update
-	         * 2.  if different provider, but better accuracy, update
-	         * 3.  if different provider, worse accuracy, at least 3 cycles without GPS, then start using less accurate provider
-	         */
-	        boolean doUpdate = false;
-	        if (provider.equalsIgnoreCase(location.getProvider())) {
-	        	doUpdate = true;
-	        } else if (accuracy > location.getAccuracy()) {
-	        	doUpdate = true;
-	        } else if (timesNoGps >=2 ) {
-        		Log.d("Main", "3 cycles without GPS, use less accurate location");
-        		doUpdate = true;
-        		if (timesNoGps == 2) {
-        			// announce no gps
-        			speakOut(TextToSpeech.QUEUE_ADD, "2 cycles without GPS, use less accurate " + location.getProvider() +".");
-        		}
-	        } else {
-	        	Log.d("onLocChange", "Ignore " + location.getProvider() +", waiting for GPS");
-	        }
-	        
-	        if (doUpdate) {
-	        	lastLoc = getLocationInstance(provider, latitude, longitude, altitude, accuracy, sampleTime);
-	        	
-	        	latitude = location.getLatitude();
-	        	longitude = location.getLongitude();
-	        	if (location.getAltitude() > 1.0) {
-	        		altitude = location.getAltitude();
-	        	}
-	        	accuracy = location.getAccuracy();
-	        	provider = location.getProvider();
-	        	sampleTime = location.getTime();
-	        
-	        	updateLocDisplay(lastLoc, doUpdate);
-	        }
+		    try {
+		        Log.d("onLocChange", location.getProvider() + ":   "+ location.getLatitude() + ", " + location.getLongitude() + ";   altitude=" + location.getAltitude() +
+		        		";   precision=" + location.getAccuracy());
+		        
+		        if (location.getProvider().equalsIgnoreCase(LocationManager.GPS_PROVIDER))
+		        {
+		        	// have GPS signal, reset the counter
+		        	timesNoGps = 0;
+		        } else {
+		        	timesNoGps++;
+		        }
+	
+		        String lastProvider = "";
+		        float lastAccuracy = 1000.0f;
+		        if (lastLocationJSObj != null) {
+		        	lastProvider = lastLocationJSObj.getString(DataManager.PROVIDER);
+		        	lastAccuracy = (float)lastLocationJSObj.getDouble(DataManager.ACCURACY);
+		        }
+		        /**
+		         * check to see whether to update the location:
+		         * 1.  if same provider, update
+		         * 2.  if different provider, but better accuracy, update
+		         * 3.  if different provider, worse accuracy, at least 3 cycles without GPS, then start using less accurate provider
+		         */
+		        boolean doUpdate = false;
+		        if (lastProvider.equalsIgnoreCase(location.getProvider())) {
+		        	doUpdate = true;
+		        } else if (lastAccuracy > location.getAccuracy()) {
+		        	doUpdate = true;
+		        } else if (timesNoGps >= 5 ) {
+	        		Log.d("onLocChange", "5 cycles without GPS, use less accurate location");
+	        		doUpdate = true;
+
+	        		speakOut(TextToSpeech.QUEUE_ADD, "  " + timesNoGps + " cycles without GPS, use provider = " + location.getProvider() +".");
+		        } else {
+		        	Log.d("onLocChange", "Ignore " + location.getProvider() +", waiting for GPS");
+		        }
+		        
+		        if (doUpdate) {
+		        	int loopIn = 0;
+		        	while (fwReady == false) {
+		        		Log.w("onService", "Location data coming before file is opened, wait for a while");
+		        		threadWait(500);
+		        		if (loopIn++ > 20) {
+		        			Log.e("onService", "gave up");
+		        			return;
+		        		}
+		        	}
+		        	lastLocationJSObj = dm.save(location);
+		        	
+		        	polledTimes++;
+		        	if ((polledTimes % speakInterval) == 1 ) {
+		        		speakLoc(lastLocationJSObj);
+		        	}
+		        	// announce current time every 15 minutes
+		        	if ((polledTimes % (speakInterval * 5)) == 1) {
+		        		java.util.Date t = new java.util.Date();
+		        		SimpleDateFormat sdf = new SimpleDateFormat("hh:mm a");
+		        		String tstr = sdf.format(t);
+		        		tts.setSpeechRate(1.0f);
+		        		tts.setPitch(1.0f);
+		        		speakOut(TextToSpeech.QUEUE_ADD, "\n\n Current time is " + tstr);
+		        	}
+		        }
+		    }
+	    	catch(Exception jex) {
+	    		Log.e("onLocChange", "have JSON or IO exception", jex);
+	    	}
 	    }
 	    
 	    public void onStatusChanged(String provider, int status, Bundle extras) {}
@@ -165,8 +209,6 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
 	    public void onProviderEnabled(String provider) {}
 
 	    public void onProviderDisabled(String provider) {
-	    	latitude = 0.00;
-	    	longitude = 0.00;
 	    	noLocation = true;
 	    }
 	}
@@ -233,21 +275,12 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
 	@Override
 	public void onCreate() {
 		Log.d("onService", "starting onCreate");
+
 		sharedPref = getSharedPreferences(getString(R.string.pref_file_name), Context.MODE_PRIVATE);
 		audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
 
 		// Restore saved language
-		provider = sharedPref.getString(LAST_PROV, "");
 		nextLang = sharedPref.getString(NEXT_LANG, "");
-		latitude = Double.valueOf(sharedPref.getString(LAST_LAT, "0.0"))
-				.doubleValue();
-		longitude = Double.valueOf(sharedPref.getString(LAST_LONG, "0.0"))
-				.doubleValue();
-		altitude = Double.valueOf(sharedPref.getString(LAST_ALT, "0.0"))
-				.doubleValue();
-		sampleTime = sharedPref.getLong(LAST_TIME, 0);
-		accuracy = sharedPref.getFloat(LAST_ACCURACY, 0.0f);
-		accuracy += 50; // assume less accuracy with saved data
 
 		tts = new TextToSpeech(this, this);
 		
@@ -259,16 +292,25 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
 	  public int onStartCommand(Intent intent, int flags, int startId) {
 		  Log.d("onService", "service onStartCommand");	
       
+		  if (fwReady == false) {
+			// Activity UI prompt users to select a trip file
+			// and pass the file name in this intent.
+			TripHandle th = (TripHandle) intent.getParcelableExtra(DataManager.TH);
+
+			dm = new DataManager(this);
+			fwReady = dm.openTripHandle(th);
+		  }
+
 		  // intent to re-launch Activity UI
-		  Intent notificationIntent = new Intent(this, MainActivity.class);
+		  Intent notificationIntent = new Intent(this, DisplayActivity.class);
 		  notificationIntent.setAction(getString(R.string.relaunch_intent_action));
 		  notificationIntent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
 		  PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, 0);
 			
-		  // intent to launch KillActivity to kill this service,
+		  // intent to launch Activity with kill intent,
 		  // the comparison of intent does not look for extras, so I have to set 
-		  // Action differently and allow MainActivity to see whether to kill.
-		  Intent killIntent = new Intent(this, MainActivity.class);
+		  // Action differently and allow DisplayActivity to see whether to kill.
+		  Intent killIntent = new Intent(this, DisplayActivity.class);
 		  killIntent.setAction(getString(R.string.kill_intent_action));
 		  killIntent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
 		  PendingIntent pendingKillIntent = PendingIntent.getActivity(this, 0, killIntent, PendingIntent.FLAG_UPDATE_CURRENT);
@@ -279,13 +321,17 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
 		    .setSmallIcon(R.drawable.ic_launcher)
 		    .setTicker(getString(R.string.foreground_service_started_ticker))
 		    .setContentIntent(pendingIntent)
-		    .addAction(R.drawable.ic_cancel, getString(R.string.title_activity_kill), pendingKillIntent);
+		    .addAction(R.drawable.ic_cancel, getString(R.string.title_activity_pause), pendingKillIntent);
 		  
 	      Notification notification = nb.build();
 
 		  int  ONGOING_NOTIFICATION_ID = 100;  // has to be unique within this application
 		  startForeground(ONGOING_NOTIFICATION_ID, notification);
 
+		  // ready to receive kill broadcast.
+		  stopReceiver = new UserStopServiceReceiver();
+		  registerReceiver(stopReceiver,  new IntentFilter(USER_STOP_SERVICE_REQUEST));
+		  
 	      // If we get killed, after returning from here, restart
 	      return START_STICKY;
 	  }
@@ -296,44 +342,47 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
 	      return null;
 	  }
 	  
+	private void closeOut() {
+		Log.d("onService",
+				"service being closed out; pid=" + android.os.Process.myPid());
+		// ready to receive kill broadcast.
+		if (stopReceiver != null) {
+			unregisterReceiver(stopReceiver);
+			stopReceiver = null;
+		}
+		  
+		stopLocationListeners();
+		threadWait(200);
+		tts.stop(); // stop the current speaking before say goodbye
+		fwReady = false;
+		speakOut(TextToSpeech.QUEUE_FLUSH, "Good bye!");
+		// make sure last sentence is done and event is fired to abandon audio
+		threadWait(1600);
+
+		ttsReady = false;
+		if (tts != null) {
+			tts.stop();
+			tts.shutdown();
+			tts = null;
+		}
+
+		SharedPreferences.Editor editor = sharedPref.edit();
+		nextLang = sharedPref.getString(NEXT_LANG, "American");
+		if (nextLang.equals("British")) {
+			nextLang = "American";
+		} else {
+			nextLang = "British";
+		}
+		editor.putString(NEXT_LANG, nextLang);
+		editor.commit();
+	}
 	  @Override
 	  public void onDestroy() {
-		  Log.d("onService", "service being distroyed; pid=" + android.os.Process.myPid());
-		  threadWait(200);
-	    	stopLocationListeners();
-	    	tts.stop(); // stop the current speaking before say goodbye
-
-	    	speakOut(TextToSpeech.QUEUE_FLUSH, "Good bye!");
-	    	// make sure last sentence is done and event is fired to abandon audio
-	    	threadWait(1600);
-	    	
-			ttsReady = false;
-	    	if (tts != null) {
-	    		
-	            tts.stop();
-	            tts.shutdown();
-	            tts = null;
-	        }
-	    	
-	    	SharedPreferences.Editor editor = sharedPref.edit();
-	    	nextLang = sharedPref.getString(NEXT_LANG, "American");
-	    	if (nextLang.equals("British")) {
-	    		nextLang = "American";
-	    	} else {
-	    		nextLang = "British";
-	    	}
-	    	editor.putString(NEXT_LANG, nextLang);
-	    	editor.putString(LAST_LAT, Double.toString(latitude));
-	    	editor.putString(LAST_LONG, Double.toString(longitude));
-	    	editor.putString(LAST_ALT, Double.toString(altitude));
-	    	editor.putLong(LAST_TIME, sampleTime);
-	    	editor.putString(LAST_PROV, provider);
-	    	editor.putFloat(LAST_ACCURACY, accuracy);
-	    	editor.commit();
-
+		  closeOut();
+	      dm.close(false);
 	  }
 	  
-	    private void setupLocationCallbacks() {
+	  private void setupLocationCallbacks() {
 	    	// Acquire a reference to the system Location Manager
 	    	LocationManager locationManager = (LocationManager) this.getSystemService(Context.LOCATION_SERVICE);
 	    	if (locProviders == null || locProviders.size() < 1) {
@@ -351,55 +400,54 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
 		    		Log.d("onService", "for provider "+ providerStr);
 	    		}
 	    	}
-	    }
+	  }
 	    
-	    private void stopLocationListeners() {
+	  private void stopLocationListeners() {
 	    	// Acquire a reference to the system Location Manager
 	    	LocationManager locationManager = (LocationManager) this.getSystemService(Context.LOCATION_SERVICE);
 	    	
 	    	locationManager.removeUpdates(myLocListener);
 
 	    	Log.d("Listener", "down");
-	    }
+	  }
 	    
-	    private void updateLocDisplay(Location l, boolean alwaysUpdate) {
+	  /**
+	   * This method will compose and speak/announce new locations
+	   * @param newLocJS
+	   */
+	  private void speakLoc(JSONObject newLocJS) throws JSONException {
+ 	    	NumberFormat nf =  NumberFormat.getInstance();
+ 	    	NumberFormat nf2 =  NumberFormat.getInstance();
+ 	    	nf.setMaximumFractionDigits(1);
+ 	    	nf2.setMaximumFractionDigits(2);
 
-	 	    if (alwaysUpdate) {
-	 	    	NumberFormat nf =  NumberFormat.getInstance();
-	 	    	nf.setMaximumFractionDigits(4);
+ 	    	String provider = newLocJS.getString(DataManager.PROVIDER);
+ 	    	double altitude = newLocJS.getDouble(DataManager.ALTITUDE);
 
-	 	    	String dispTxt = (alwaysUpdate?"  New ":"  Last ") + provider + ",\n  latitude       " + nf.format(latitude) 
-	 	    			+ ",\n  longitude " + nf.format(longitude) +",\n  altitude   " + (long)(altitude)
-	 	    			+" meters,\n  accuracy   " + (int)(accuracy) +" meters.\n\n";
+ 	    	long  triptime = newLocJS.getLong(DataManager.TRIPTIME);
+ 	    	long  tripdistance = newLocJS.getLong(DataManager.TRIPDISTANCE);
+ 	    	float mileDist = (float) (((double)tripdistance) * 0.000621371); 
+ 	    	double altFeet = altitude * 3.28084;
+ 	    	String dispTxt = "Location from " + provider + ",\n...  Current elevation  " + nf.format(altFeet) + " feet.\n";
 
-	 	    	String speakTxt = "<?xml version=\"1.0\"?> " +
-	                              "<speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\" " +
-	                              "xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" " +
-	                              "xsi:schemaLocation=\"http://www.w3.org/2001/10/synthesis http://www.w3.org/TR/speech-synthesis/synthesis.xsd\" " +
-	                              "xml:lang=\"en-US\"><prosody rate=\"1.2\">" + dispTxt + "</prosody></speak>";
-	 	    	speakOut(TextToSpeech.QUEUE_ADD, speakTxt);
-	 	    	
-	 	    	// check distance the ascend/descend
-	 	    	if (l != null && Math.abs(l.getAltitude()) > 0.01 && Math.abs(l.getLongitude()) > 0.01) {
-	 	    		Location newL = getLocationInstance(provider, latitude, longitude, altitude, accuracy, sampleTime);
-	 	    		float dist = newL.distanceTo(l);
-	 	    		double h = altitude - l.getAltitude();
-	 	    		if ((dist > 20) || (h > 20) || (h < -20)) {
-	 	    			String distMsg = "Traveled distance of " + (int)(dist) + " meters, ";
-	 	    			if (h > 0.5) {
-	 	    				distMsg = distMsg + " ascended up " + (int)(h) + " meters, ";
-	 	    			} else if ( h < -0.5) {
-	 	    				distMsg = distMsg + " descended down " + (int)((-1)*h) + " meters, ";
-	 	    			}
-	 	    			long pastMin = ((sampleTime - l.getTime())/1000)/60;
-	 	    			distMsg = distMsg + " in the past " + pastMin + " minutes. \n";
-	 	    			tts.setSpeechRate(1.4f);
-	 	    			tts.setPitch(1.5f);
-	 	    			speakOut(TextToSpeech.QUEUE_ADD, distMsg);
-	 	    		}
-	 	    	}
-	        }
-	    }
+ 	    	String speakTxt = "<?xml version=\"1.0\"?> " +
+                              "<speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\" " +
+                              "xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" " +
+                              "xsi:schemaLocation=\"http://www.w3.org/2001/10/synthesis http://www.w3.org/TR/speech-synthesis/synthesis.xsd\" " +
+                              "xml:lang=\"en-US\"><prosody  >" + dispTxt + "</prosody></speak>";
+ 	    	speakOut(TextToSpeech.QUEUE_ADD, speakTxt);
+ 	    	
+ 	    	if (tripdistance > -1) {
+ 	    		
+ 	    		String timeTxt = DataManager.convertTimeString(triptime);
+ 	    		
+ 	    		String speakTxt2 = "Trip time: " + timeTxt + ",... distance: " + nf2.format(mileDist) + " miles";
+ 	    		
+    			tts.setSpeechRate(1.8f);
+    			tts.setPitch(0.9f);
+    			speakOut(TextToSpeech.QUEUE_ADD, speakTxt2);
+ 	    	}
+	  }
 	  private void speakOut(int queueMode, String speakTxt) {
 	    	if (tts != null && ttsReady == true) {
 	    		// acquire audio focus 
@@ -408,7 +456,7 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
 	    		//       this method would pass through, and QUEUED the speech, and when
 	    		//       the previous speech is done, it abandons focus, the music will be on.
 	    		//  SO, it is important to acquire focus again in onStart(), so that this 
-	    		//  sentence will have the focus.
+	            //  sentence will have the focus.
 		        int res = audioManager.requestAudioFocus(afChangeListener, AudioManager.STREAM_MUSIC, 
 	                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
 		        if (res == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
@@ -422,17 +470,7 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
 		        }
 	    	}
 	  }
-	    
-	  private Location getLocationInstance(String prov, double latitude, double longitude, double altitude, float accuracy, long lastTime) {
-	    	Location retLoc = new Location(prov);
-	    	retLoc.setLatitude(latitude);
-	    	retLoc.setLongitude(longitude);
-	    	retLoc.setAltitude(altitude);
-	    	retLoc.setAccuracy(accuracy);
-	    	retLoc.setTime(lastTime);
-	    	
-	    	return retLoc;
-	  }	  
+	  
 	  private void threadWait(int millis) {
 	    	try {
 				// allow time to abandon audio

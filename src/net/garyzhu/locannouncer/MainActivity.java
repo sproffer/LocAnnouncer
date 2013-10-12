@@ -1,6 +1,13 @@
 package net.garyzhu.locannouncer;
 
 
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
 import android.media.AudioManager;
@@ -9,9 +16,18 @@ import android.os.Bundle;
 import android.util.Log;
 import android.view.Menu;
 import android.view.View;
+import android.widget.AdapterView;
+import android.widget.EditText;
+import android.widget.ListView;
+import android.widget.SimpleAdapter;
+import android.widget.TextView;
+import android.widget.Toast;
 
 public class MainActivity extends Activity {
 		
+	DataManager dm = null;
+	List<TripHandle> thList = null;
+	
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -20,49 +36,81 @@ public class MainActivity extends Activity {
         Log.d("mainActivity", "done onCreate pid=" + android.os.Process.myPid());
     }
     
-    /**
-     * This is called when current activity is running, and
-     * an intent is invoked with Intent.FLAG_ACTIVITY_SINGLE_TOP
-     * 
-     */
-    @Override
-    public void onNewIntent(Intent i) {
-    	if (isStopIntent(i)) {
-    		// this is a stop intent for an existing activity, 
-    		// update this activity's intent with this stop intent so that onResume will detect it
-    		// and stop the activity. Otherwise, this activity's intent would still be original one.
-    		// note that no matter how to 'stop' the service, onResume will be called, so the service 
-    		// will get re-started.  So let the onResume to do the job, just pass in stop intent.
-    		setIntent(i);  
-        	Log.d("mainActivity", "in onNewIntent -- update with stop intent");       	
-    	}
-    }
-    
     @Override
     public void onStart() {
     	super.onStart();
     	// allow hardware volume button to work here
     	this.setVolumeControlStream(AudioManager.STREAM_MUSIC);
-    	Log.d("mainActivity", "done onStart");
+    	dm = new DataManager(this);
+    	thList = dm.getTripHandles(false);
+    	Log.d("mainActivity", "done onStart; list size=" + thList.size());
     }
 
     @Override
     public void onResume() {    	
     	super.onResume();   // for activity, always call super class method first
     	
-    	Intent i = this.getIntent();
-    	if (isStopIntent(i)) {
-        	stopAnnouncer(this.findViewById(R.layout.activity_main));
-        	this.finish();
-        	return;
-    	}
-    	Log.d("mainActivity", "in onResumt .. starting service,  pid=" +android.os.Process.myPid());
-    	// start a service
-    	Intent intent = new Intent(this, LocAnnouncer.class);
-    	startService(intent);
-    	Log.d("mainActivity", "service started");
+    	List<Map<String, String>> listTrips = getListData(thList, "name");
+    	
+        // We get the ListView component from the layout
+    	ListView lv = (ListView) findViewById(R.id.listView);
+	    // This is a simple adapter that accepts as parameter
+	    // Context
+	    // Data list
+	    // The row layout that is used during the row creation
+	    // The keys used to retrieve the data
+	    // The View id used to show the data. The key number and the view id must match
+	    SimpleAdapter simpleAdpt = new SimpleAdapter(this, listTrips, android.R.layout.simple_list_item_1, new String[] {"name"}, new int[] {android.R.id.text1});
+	 
+	    lv.setAdapter(simpleAdpt);
+	    
+	    // React to user clicks on item
+	    lv.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+	         public void onItemClick(AdapterView<?> parentAdapter, View view, int position,  long id) {
+
+	             // We know the View is a TextView so we can cast it
+	             //TextView clickedView = (TextView) view;
+	             TripHandle  th = thList.get(position);
+	             if (th.completed) {
+	            	 Toast.makeText(MainActivity.this, "The trip " + id + " ["+th.tripName+"] has completed!", Toast.LENGTH_LONG).show();
+	             } else {
+	            	 Toast.makeText(MainActivity.this, "Continue trip "+id+" ["+th.tripName+"]", Toast.LENGTH_SHORT).show();
+	            	 continueTrip(th);
+	             }
+	         }
+	    });
     }
     
+    private void continueTrip(TripHandle th) {
+    	Intent intent = new Intent(this, DisplayActivity.class);
+    	intent.putExtra(DataManager.TH, th);
+    	startActivity(intent);
+    }
+    
+    @SuppressLint("SimpleDateFormat")
+	private List<Map<String, String>> getListData(List<TripHandle> l, String title) {
+    	SimpleDateFormat df = new SimpleDateFormat("dd-MMM-yyyy  HH:mm:ss");
+    	SimpleDateFormat tf = new SimpleDateFormat("HH:mm:ss");
+    	
+    	List<Map<String, String>> retA = new ArrayList< Map<String, String> >();
+    	// specify which file contains trip data, it could be an empty (or non-existent) file.
+    	// later on, the Main panel would open all files, read the title and then, allow users
+    	// to choose.
+    	//
+    	for (TripHandle th: l) {
+    		Log.d("mainActivity", "trip handle "+ th.toString());
+    			String line =  th.tripName + "\n" + (th.startTime==null? "" : (df.format(th.startTime) + " -- " + tf.format(th.stopTime)));
+    		    line += "\n duration: " + DataManager.convertTimeString(th.stopTime.getTime() - th.startTime.getTime());
+    		    if (th.completed) {
+    		    	line += "\n  -- completed --";
+    		    }
+    			HashMap<String, String> oneEntry = new HashMap<String, String>();
+    			oneEntry.put(title, line);
+    			retA.add(oneEntry);
+    	}
+    	return retA;
+    }
+
     @Override
     public void onPause() {
     	super.onPause();  // for activity, always call super class method first
@@ -96,23 +144,16 @@ public class MainActivity extends Activity {
         return true;
     }
     
-    public void stopAnnouncer(View v) {
-        stopService(new Intent(this, LocAnnouncer.class));
-        this.finish();
-    }
-    
-    /**
-     * test to see whether this intent has Extra parameter for isSopt=true
-     * @param i  the Intent to be examined
-     * @return   true if this intent is for stop
-     */
-    private boolean isStopIntent(Intent i) {
-    	boolean retV =  false;
+    public void startNewRoute(View v) {
+    	Log.d("mainActivity", "in onResumt .. starting service,  pid=" +android.os.Process.myPid());
+   	
+    	EditText et = (EditText)findViewById(R.id.new_trip_name);
+    	String tripName = et.getText().toString();
+    	TripHandle th = new TripHandle();
+    	th.tripName = tripName;
 
-    	if (i.getAction() != null && i.getAction().equals(getString(R.string.kill_intent_action))) {
-    		retV = true;
-    		Log.d("mainActivity", "received stop intent");
-    	}
-    	return retV;
+    	Intent intent = new Intent(this, DisplayActivity.class);
+    	intent.putExtra(DataManager.TH, th);
+    	startActivity(intent);
     }
 }

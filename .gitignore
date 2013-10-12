@@ -1,0 +1,4 @@
+# Ignore generated files (under gen/), compiled class files and package files (under bin/) #
+gen/**/*
+bin/**/*
+bin/*

@@ -4,8 +4,9 @@
     android:versionCode="1"
     android:versionName="1.0" 
     android:installLocation="preferExternal">
- 
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     
     <uses-sdk
         android:minSdkVersion="9"
@@ -22,10 +23,18 @@
             android:configChanges="keyboardHidden|orientation|screenSize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity> 
+        <activity
+            android:name="net.garyzhu.locannouncer.DisplayActivity"
+            android:label="@string/title_route_display"
+            android:configChanges="keyboardHidden|orientation|screenSize"
+            android:parentActivityName="net.garyzhu.locannouncer.MainActivity" >
+            <meta-data
+                android:name="android.support.PARENT_ACTIVITY"
+                android:value="net.garyzhu.locannouncer.MainActivity" />
+        </activity>
         <service android:name="net.garyzhu.locannouncer.LocAnnouncer"></service>
     </application>
 

@@ -4,9 +4,13 @@
     <string name="app_name">LocAnnouncer</string>
     <string name="action_settings">Settings</string>
     <string name="pref_file_name">net.garyzhu.locannouncer.PreferenceFile</string>
+    <string name="start_new_route">Start new Route</string>
+    <string name="new_route_name">New route name</string>
+    <string name="title_route_display">Current Route</string>
     <string name="foreground_service_started_ticker">LocAnnouncer is running</string>
     <string name="app_desc">Location Announcer</string>    
-    <string name="title_activity_kill">Exit LocAnnouncer</string>
+    <string name="title_activity_pause">Stop LocAnnouncer</string>
+    <string name="title_activity_kill">Trip Complete</string>
 	<string name="kill_intent_action">net.garyzhu.locannouncer.KILL</string>
 	<string name="relaunch_intent_action">net.garyzhu.locannouncer.RELAUNCH</string>
 </resources>

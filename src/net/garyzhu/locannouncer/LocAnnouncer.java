@@ -29,6 +29,7 @@ import android.os.Bundle;
 import android.os.IBinder;
 
 import android.speech.tts.TextToSpeech;
+import android.speech.tts.TextToSpeech.EngineInfo;
 import android.speech.tts.UtteranceProgressListener;
 import android.support.v4.app.NotificationCompat;
 import android.util.Log;
@@ -213,6 +214,28 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
 	    }
 	}
 	
+	@TargetApi(Build.VERSION_CODES.ICE_CREAM_SANDWICH)
+	private boolean changeTTSEngine() {
+		s++;
+		if (s > 4) {
+			Log.e("onUtter", "Failed to get a speech engine");
+			return false;
+		}
+
+		List<EngineInfo> engines = tts.getEngines();
+		String p = tts.getDefaultEngine();
+		int i = 0;
+		for (EngineInfo e : engines) {
+			i++;
+			if (((e.name).equalsIgnoreCase(tts.getDefaultEngine()) == false) && (i >= s)) {
+				p = e.name;
+			}
+		}
+		Log.d("onUtter", "try to initiate with engine " + p);
+		tts = new TextToSpeech(this, this, p);
+		return true;
+	}
+	
 	@TargetApi(Build.VERSION_CODES.ICE_CREAM_SANDWICH_MR1)
 	@Override
 	public void onInit(int status) {
@@ -233,12 +256,20 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
             
             if (result == TextToSpeech.LANG_MISSING_DATA
                     || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-        		Log.e("onUtter", "This Language is not supported " + result);	    
-        		tts = null;
+        		Log.e("onUtter", "This Language is not supported " + result + " try a different engine/language.");	
+        		if (changeTTSEngine()) {
+        			return;
+        		} else {
+        			tts = null;
+        		}
             }
        } else {
             Log.e("onUtter", "Initilization Failed!");
-            tts = null;
+            if (changeTTSEngine()) {
+            	return;
+            } else {
+            	tts = null;
+            }
        }
        if (tts != null) {
            afChangeListener = new OnAudioFocusChangeListener() {
@@ -269,6 +300,7 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
     		   Log.d("onUtter", "set up utterance listener");
     	   }
     	   ttsReady = true;
+    	   s = 0;
        }
     }
 

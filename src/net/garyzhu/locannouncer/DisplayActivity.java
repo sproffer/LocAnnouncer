@@ -1,11 +1,15 @@
 package net.garyzhu.locannouncer;
 
+import java.util.Timer;
+import java.util.TimerTask;
+
 import android.app.Activity;
 import android.content.Intent;
 import android.media.AudioManager;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
+import android.view.WindowManager;
 import android.webkit.ConsoleMessage;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -13,7 +17,22 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
 public class DisplayActivity extends Activity {
-
+	
+	private void dimScreen() {
+		WindowManager.LayoutParams lp = getWindow().getAttributes();
+		float currentBP = lp.screenBrightness;
+		Log.d("onDisplay", "Current brightness: " + currentBP);
+		if (currentBP >= 0.3f) {			
+			lp.screenBrightness = 0.05f;
+			Log.d("onDisplay", "Dim screen to 0.05");
+			getWindow().setAttributes(lp);
+		} else if (currentBP < 0) {
+			lp.screenBrightness = 0.01f;
+			Log.d("onDisplay", "Dim screen to 0.01");
+			getWindow().setAttributes(lp);
+		}
+	}
+	
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -21,6 +40,13 @@ public class DisplayActivity extends Activity {
         setContentView(R.layout.activity_display);
         // allow hardware volume button to work here
     	this.setVolumeControlStream(AudioManager.STREAM_MUSIC);
+    	
+    	//getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    }
+    
+    protected void onDestroy() {
+    	super.onDestroy();
+    	getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     }
     /**
      * This is called when current activity is running, and
@@ -60,6 +86,8 @@ public class DisplayActivity extends Activity {
 	    	startService(intent);
     	}
     	fillInMapView(th);
+    	
+    	dimScreen();
 	}
 	
 	private void fillInMapView(TripHandle th) {

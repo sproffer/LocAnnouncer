@@ -10,6 +10,7 @@ import java.util.Locale;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Notification;
 import android.app.PendingIntent;
@@ -40,6 +41,8 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
     private final int speakInterval = 6;
     private int polledTimes = 0;
         
+    private String engineChanged = "";
+    
 	private final static String NEXT_LANG = "next_lang";
 	
 	DataManager dm = null;
@@ -134,7 +137,8 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
 			super();
 		};
 		
-	    public void onLocationChanged(Location location) {
+	    @SuppressLint("SimpleDateFormat")
+		public void onLocationChanged(Location location) {
 		    try {
 		        Log.d("onLocChange", location.getProvider() + ":   "+ location.getLatitude() + ", " + location.getLongitude() + ";   altitude=" + location.getAltitude() +
 		        		";   precision=" + location.getAccuracy());
@@ -197,6 +201,7 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
 		        		tts.setSpeechRate(1.0f);
 		        		tts.setPitch(1.0f);
 		        		speakOut(TextToSpeech.QUEUE_ADD, "\n\n Current time is " + tstr);
+		        		
 		        	}
 		        }
 		    }
@@ -216,9 +221,13 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
 	
 	@TargetApi(Build.VERSION_CODES.ICE_CREAM_SANDWICH)
 	private boolean changeTTSEngine() {
+		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.ICE_CREAM_SANDWICH) {
+			return false;
+		}
 		s++;
 		if (s > 4) {
 			Log.e("onUtter", "Failed to get a speech engine");
+			engineChanged = "";
 			return false;
 		}
 
@@ -229,10 +238,14 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
 			i++;
 			if (((e.name).equalsIgnoreCase(tts.getDefaultEngine()) == false) && (i >= s)) {
 				p = e.name;
+				break;
 			}
 		}
 		Log.d("onUtter", "try to initiate with engine " + p);
+		// shutdown current tts engine
+		tts.shutdown();
 		tts = new TextToSpeech(this, this, p);
+		engineChanged = "TTS engine is being changed to " + p;
 		return true;
 	}
 	
@@ -294,27 +307,38 @@ public class LocAnnouncer extends Service implements TextToSpeech.OnInitListener
 					}
 				}
            };
-    	   if (Build.VERSION.SDK_INT >= 15) {
+    	   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.ICE_CREAM_SANDWICH_MR1) {
     		   UtteranceProgressListener ul = new utteranceListener();
     		   tts.setOnUtteranceProgressListener(ul);
     		   Log.d("onUtter", "set up utterance listener");
     	   }
     	   ttsReady = true;
     	   s = 0;
+    	   
+    	   if (engineChanged.length() > 1) {
+    		   speakOut(TextToSpeech.QUEUE_FLUSH, engineChanged);
+    		   engineChanged = "";
+    	   }
        }
     }
 
 	@Override
 	public void onCreate() {
 		Log.d("onService", "starting onCreate");
-
+		
 		sharedPref = getSharedPreferences(getString(R.string.pref_file_name), Context.MODE_PRIVATE);
 		audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
 
 		// Restore saved language
 		nextLang = sharedPref.getString(NEXT_LANG, "");
-
-		tts = new TextToSpeech(this, this);
+		if ((tts != null) && ttsReady) {
+			// onCreate() may be invoked multiple times
+			// tts is ready
+			engineChanged = "Use existing Engine " + tts.getDefaultEngine();
+		} else {
+			engineChanged = "";
+			tts = new TextToSpeech(this, this);
+		}
 		
 		setupLocationCallbacks();
 		Log.d("onService", "done onCreate, pid=" + android.os.Process.myPid());

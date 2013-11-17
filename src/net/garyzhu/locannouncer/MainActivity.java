@@ -1,6 +1,8 @@
 package net.garyzhu.locannouncer;
 
 
+import java.io.File;
+import java.io.FilenameFilter;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -13,6 +15,8 @@ import android.content.Intent;
 import android.media.AudioManager;
 
 import android.os.Bundle;
+import android.provider.Settings;
+import android.telephony.TelephonyManager;
 import android.util.Log;
 import android.view.Menu;
 import android.view.View;
@@ -31,7 +35,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-    	
+
+    	String andId = android.provider.Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
+Log.d("mainActivity", "ANDROID_ID=" + andId);
         setContentView(R.layout.activity_main);
         Log.d("mainActivity", "done onCreate pid=" + android.os.Process.myPid());
     }
@@ -49,6 +55,8 @@ public class MainActivity extends Activity {
     @Override
     public void onResume() {    	
     	super.onResume();   // for activity, always call super class method first
+    	
+
     	
     	List<Map<String, String>> listTrips = getListData(thList, "name");
     	
@@ -99,6 +107,7 @@ public class MainActivity extends Activity {
     	//
     	for (TripHandle th: l) {
     		Log.d("mainActivity", "trip handle "+ th.toString());
+    		try {
     			String line =  th.tripName + "\n" + (th.startTime==null? "" : (df.format(th.startTime) + " -- " + tf.format(th.stopTime)));
     		    line += "\n duration: " + DataManager.convertTimeString(th.stopTime.getTime() - th.startTime.getTime());
     		    if (th.completed) {
@@ -107,6 +116,11 @@ public class MainActivity extends Activity {
     			HashMap<String, String> oneEntry = new HashMap<String, String>();
     			oneEntry.put(title, line);
     			retA.add(oneEntry);
+    		} catch (Exception x) {
+    			Log.e("mainActivity", "Error reading a trip file, " + x.getMessage() + "; delete the faulty file.. " + th.fileName);
+    			File f = new File(th.fileName);
+    			f.delete();
+    		}
     	}
     	return retA;
     }

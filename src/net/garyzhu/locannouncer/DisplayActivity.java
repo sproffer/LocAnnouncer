@@ -1,14 +1,15 @@
 package net.garyzhu.locannouncer;
 
-import java.util.Timer;
-import java.util.TimerTask;
-
 import android.app.Activity;
 import android.content.Intent;
 import android.media.AudioManager;
 import android.os.Bundle;
+import android.os.CountDownTimer;
+import android.provider.Settings.SettingNotFoundException;
 import android.util.Log;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.View.OnTouchListener;
 import android.view.WindowManager;
 import android.webkit.ConsoleMessage;
 import android.webkit.WebChromeClient;
@@ -16,24 +17,63 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
-public class DisplayActivity extends Activity {
+public class DisplayActivity extends Activity 
+implements OnTouchListener {
+	float origBrightness = 0.0f;
+    boolean allDone = true;
+	/**
+	 * start the timer to dim the screen light
+	 */
+	CountDownTimer dimTimer = new CountDownTimer(6100, 2000) {
+
+		 public void onTick(long millisUntilFinished) {
+		     Log.d("onDisplay", "dim count down " + millisUntilFinished/1000);
+		 }
+
+		 public void onFinish() {
+		     dimScreen();
+		 }  
+	};
 	
 	private void dimScreen() {
 		WindowManager.LayoutParams lp = getWindow().getAttributes();
 		float currentBP = lp.screenBrightness;
-		Log.d("onDisplay", "Current brightness: " + currentBP);
-		if (currentBP >= 0.3f) {			
-			lp.screenBrightness = 0.05f;
-			Log.d("onDisplay", "Dim screen to 0.05");
+		
+		if (currentBP > 0.08f) {
+			lp.screenBrightness = currentBP / 1.5f;
+			Log.d("onDisplay", "Dim screen from " + currentBP + " to " + lp.screenBrightness);
 			getWindow().setAttributes(lp);
-		} else if (currentBP < 0) {
+			synchronized(dimTimer) {
+				dimTimer.cancel();
+				if (allDone == false)  dimTimer.start();
+			}			
+		} else {
 			lp.screenBrightness = 0.01f;
 			Log.d("onDisplay", "Dim screen to 0.01");
 			getWindow().setAttributes(lp);
 		}
 	}
 	
-    @Override
+	private void lightupScreen() {
+		WindowManager.LayoutParams lp = getWindow().getAttributes();
+		if (lp.screenBrightness > 0.2f) {
+			//Log.d("onDisplay", "already light-up, do nothing");
+			return;
+		}
+		
+		// make it a little bit brighter than the original brightness
+		lp.screenBrightness = origBrightness + (1f - origBrightness)/2.0f;
+		
+		getWindow().setAttributes(lp);
+		// cancel previous dim timer and start a new one
+		synchronized(dimTimer) {
+			dimTimer.cancel();
+			if (allDone == false)
+			    dimTimer.start();
+		}
+	}
+	
+	@Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
     	
@@ -41,10 +81,33 @@ public class DisplayActivity extends Activity {
         // allow hardware volume button to work here
     	this.setVolumeControlStream(AudioManager.STREAM_MUSIC);
     	
+    	// retrieve and save original brightness
+		WindowManager.LayoutParams lp = getWindow().getAttributes();
+		
+		origBrightness = lp.screenBrightness;
+		if (origBrightness == -1) {		
+			try {
+				// if it is auto, try to get the system setting, which is in the scale of 255
+				//  and assign it to the windows attribute for future calculation.
+			    origBrightness = android.provider.Settings.System.getInt(getContentResolver(), android.provider.Settings.System.SCREEN_BRIGHTNESS)/255f;
+			} catch (SettingNotFoundException e) {
+			    Log.d("onDisplay", "Failed to get current brightness " + e.getMessage());
+			}
+			lp.screenBrightness = origBrightness;
+			getWindow().setAttributes(lp);
+		}
+		
+		Log.d("onDisplay", "Original brightness is " + origBrightness);
+		
     	//getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+		
     }
     
     protected void onDestroy() {
+    	synchronized(dimTimer) {
+    		allDone = true;
+    		dimTimer.cancel();
+    	}
     	super.onDestroy();
     	getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     }
@@ -86,9 +149,9 @@ public class DisplayActivity extends Activity {
 	    	startService(intent);
     	}
     	fillInMapView(th);
-    	
-    	dimScreen();
-	}
+    	allDone = false;
+    	dimTimer.start();
+	};
 	
 	private void fillInMapView(TripHandle th) {
 		WebView mWebView = (WebView) findViewById(R.id.mapview);
@@ -106,6 +169,10 @@ public class DisplayActivity extends Activity {
 				}
 				view.reload();
 		    }
+			@Override
+		    public void onPageFinished(WebView view, String url) {
+		        Log.d("onDisplay", "Map page loaded");
+		    }
 		});
 		mWebView.setWebChromeClient(new WebChromeClient() {	
 			@Override
@@ -114,10 +181,12 @@ public class DisplayActivity extends Activity {
 				return true;
 			}
 		});
+		
+		mWebView.setOnTouchListener(this);
 		String mapUrl = "http://www.garyzhu.net/m.html";
 		mWebView.loadUrl(mapUrl);
 	}
-    
+	
     public void stopLocAnnouncer(View v) {
     	Log.d("onDisplay", "complete stop");
     	Intent intent = new Intent(LocAnnouncer.USER_STOP_SERVICE_REQUEST);
@@ -147,4 +216,18 @@ public class DisplayActivity extends Activity {
     	}
     	return retV;
     }
+
+
+	@Override
+	public boolean onTouchEvent(MotionEvent event) {
+		//the current event does nothing, return false, let the webview handle all touch event
+	    return false;
+	}
+
+	@Override
+	public boolean onTouch(View v, MotionEvent event) {
+		// on touch, light up screen
+		lightupScreen();
+		return onTouchEvent(event);
+	}
 }
